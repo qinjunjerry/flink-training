@@ -38,6 +38,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.StreamSupport;
 
 import static com.ververica.flink.training.common.EnvironmentUtils.createConfiguredEnvironment;
 import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
@@ -46,10 +47,10 @@ import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
  * Solution 3 fixes the streaming job with slow checkpointing by sorting the stream based on event time
  * then pre-aggregation.
  *
- * Sort with MapState<Long, List<Measurement>>, register a timer for each event
- * Latency: 9.8s, Throughput: 11.28k, Checkpoint duration: 8s
+ * Sort with MapState<Long, List<Measurement>>, register a timer per watermark
+ * Latency: 14.5s, Throughput: 8.11k, Checkpoint duration: 10s
  */
-public class CheckpointingJobSolution3 {
+public class CheckpointingJobSolution331 {
 
     /**
      * Creates and starts the troubled streaming job.
@@ -118,7 +119,7 @@ public class CheckpointingJobSolution3 {
 					.disableChaining();
 		}
 
-		env.execute(CheckpointingJobSolution3.class.getSimpleName());
+		env.execute(CheckpointingJobSolution331.class.getSimpleName());
 	}
 
 	public static class SortMeasurementFunction
@@ -152,18 +153,32 @@ public class CheckpointingJobSolution3 {
 				}
 				measurementList.add(value.f0);
 				mapState.put(value.f1, measurementList);
-				timerService.registerEventTimeTimer(currentTimestamp);
+				timerService.registerEventTimeTimer(currentWatermark + 1);
 			}
 		}
 
 		@Override
 		public void onTimer(long timestamp, OnTimerContext ctx,
 							Collector<Tuple2<Measurement, Long>> out) throws Exception {
-			List<Measurement> measurementList = mapState.get(timestamp);
-			for (Measurement measurement : measurementList) {
-				out.collect(new Tuple2<>(measurement, timestamp));
-			}
-			mapState.remove(timestamp);
+			Long currentWatermark = ctx.timerService().currentWatermark();
+
+			StreamSupport.stream(mapState.keys().spliterator(), false)
+				.filter( e -> e <= currentWatermark)
+				.sorted()
+				.map(eventTimestamp -> {
+							try {
+								List<Measurement> measurementList = mapState.get(eventTimestamp);
+								for (Measurement measurement : measurementList) {
+									out.collect(new Tuple2<>(measurement, eventTimestamp));
+								}
+								mapState.remove(eventTimestamp);
+							} catch (Exception e) {
+								e.printStackTrace();
+							} finally {
+								return null;
+							}
+						}
+				);
 		}
 	}
 

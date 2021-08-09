@@ -43,6 +43,9 @@ public class SourceUtils {
 		return new FakeKafkaSource(RANDOM_SEED, 0.0f, Collections.emptyList(), serializedMeasurements);
 	}
 
+	/**
+	 * Generate {@code NUM_OF_MEASUREMENTS} {@code Measurement}s, return them serialized in a list.
+	 */
 	private static List<byte[]> createSerializedMeasurements() {
 		Random rand = new Random(RANDOM_SEED);
 		ObjectMapper mapper = new ObjectMapper();
@@ -64,6 +67,9 @@ public class SourceUtils {
 		return measurements;
 	}
 
+	/**
+	 * Reads a list of cities from the packaged file {@code cities.cvs}.
+	 */
 	private static List<String> readLocationsFromFile() {
 		List<String> locations = new ArrayList<>();
 		try (

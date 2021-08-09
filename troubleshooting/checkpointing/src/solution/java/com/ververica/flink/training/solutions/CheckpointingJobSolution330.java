@@ -49,7 +49,7 @@ import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
  * Sort with MapState<Long, List<Measurement>>, register a timer for each event
  * Latency: 9.8s, Throughput: 11.28k, Checkpoint duration: 8s
  */
-public class CheckpointingJobSolution3 {
+public class CheckpointingJobSolution330 {
 
     /**
      * Creates and starts the troubled streaming job.
@@ -118,7 +118,7 @@ public class CheckpointingJobSolution3 {
 					.disableChaining();
 		}
 
-		env.execute(CheckpointingJobSolution3.class.getSimpleName());
+		env.execute(CheckpointingJobSolution330.class.getSimpleName());
 	}
 
 	public static class SortMeasurementFunction

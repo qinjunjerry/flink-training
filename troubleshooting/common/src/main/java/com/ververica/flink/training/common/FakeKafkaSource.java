@@ -89,6 +89,7 @@ public class FakeKafkaSource extends
 				byte[] serializedMeasurement =
 						serializedMeasurements.get(rand.nextInt(serializedMeasurements.size()));
 
+				// simulate invalid events by truncating the byte array serializedMeasurement
 				if (rand.nextFloat() > 1 - poisonPillRate) {
 					serializedMeasurement = Arrays.copyOf(serializedMeasurement, 10);
 				}

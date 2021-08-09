@@ -34,10 +34,10 @@ import com.ververica.flink.training.common.WindowedMeasurements;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.StreamSupport;
 
 import static com.ververica.flink.training.common.EnvironmentUtils.createConfiguredEnvironment;
 import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
@@ -46,10 +46,9 @@ import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
  * Solution 3 fixes the streaming job with slow checkpointing by sorting the stream based on event time
  * then pre-aggregation.
  *
- * Sort with MapState<Long, List<Measurement>>, register a timer for each event
- * Latency: 9.8s, Throughput: 11.28k, Checkpoint duration: 8s
+ * Sort with MapState<Long, Measurement>, register a timer for each event
  */
-public class CheckpointingJobSolution3 {
+public class CheckpointingJobSolution311 {
 
     /**
      * Creates and starts the troubled streaming job.
@@ -118,23 +117,23 @@ public class CheckpointingJobSolution3 {
 					.disableChaining();
 		}
 
-		env.execute(CheckpointingJobSolution3.class.getSimpleName());
+		env.execute(CheckpointingJobSolution311.class.getSimpleName());
 	}
 
 	public static class SortMeasurementFunction
 			extends KeyedProcessFunction<Integer, Tuple2<Measurement, Long>, Tuple2<Measurement, Long>> {
 
-		private MapState<Long, List<Measurement>> mapState;
+		private MapState<Long, Measurement> mapState;
 
 		@Override
 		public void open(Configuration parameters) throws Exception {
 			super.open(parameters);
 
-			MapStateDescriptor<Long, List<Measurement>> desc =
-					new MapStateDescriptor<Long, List<Measurement>>(
+			MapStateDescriptor<Long, Measurement> desc =
+					new MapStateDescriptor<Long, Measurement>(
 							"events",
 							Types.LONG,
-							Types.LIST(Types.POJO(Measurement.class))
+							Types.POJO(Measurement.class)
 					);
 			mapState = getRuntimeContext().getMapState(desc);
 		}
@@ -142,28 +141,33 @@ public class CheckpointingJobSolution3 {
 		@Override
 		public void processElement(Tuple2<Measurement, Long> value, Context ctx, Collector<Tuple2<Measurement, Long>> out) throws Exception {
 			TimerService timerService = ctx.timerService();
-			Long currentTimestamp = ctx.timestamp();
-			Long currentWatermark = timerService.currentWatermark();
+			Long currentWatermark = ctx.timerService().currentWatermark();
 
-			if (currentTimestamp > currentWatermark) {
-				List<Measurement> measurementList = mapState.get(currentTimestamp);
-				if (measurementList == null) {
-					measurementList = new ArrayList<>();
-				}
-				measurementList.add(value.f0);
-				mapState.put(value.f1, measurementList);
-				timerService.registerEventTimeTimer(currentTimestamp);
+			if (ctx.timestamp() > currentWatermark) {
+				mapState.put(value.f1, value.f0);
+				timerService.registerEventTimeTimer(currentWatermark+1);
 			}
 		}
 
 		@Override
 		public void onTimer(long timestamp, OnTimerContext ctx,
 							Collector<Tuple2<Measurement, Long>> out) throws Exception {
-			List<Measurement> measurementList = mapState.get(timestamp);
-			for (Measurement measurement : measurementList) {
-				out.collect(new Tuple2<>(measurement, timestamp));
-			}
-			mapState.remove(timestamp);
+			Long currentWatermark = ctx.timerService().currentWatermark();
+			StreamSupport.stream(mapState.keys().spliterator(), false)
+					.filter( e -> e <= currentWatermark)
+					.sorted()
+					.map(eventTimestamp -> {
+								try {
+									Measurement measurement = mapState.get(eventTimestamp);
+									out.collect(new Tuple2<>(measurement, eventTimestamp));
+									mapState.remove(eventTimestamp);
+								} catch (Exception e) {
+									e.printStackTrace();
+								} finally {
+									return null;
+								}
+							}
+					);
 		}
 	}
 

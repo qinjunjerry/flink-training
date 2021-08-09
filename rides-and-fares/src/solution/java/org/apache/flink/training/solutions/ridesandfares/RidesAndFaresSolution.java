@@ -56,6 +56,7 @@ public class RidesAndFaresSolution extends ExerciseBase {
 		conf.setString("state.backend", "filesystem");
 		conf.setString("state.savepoints.dir", "file:///tmp/savepoints");
 		conf.setString("state.checkpoints.dir", "file:///tmp/checkpoints");
+		conf.setString("rest.port", "18081");
 		StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(conf);
 		env.setParallelism(ExerciseBase.parallelism);
 
