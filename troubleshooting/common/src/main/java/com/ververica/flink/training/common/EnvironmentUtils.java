@@ -4,12 +4,16 @@ import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.api.common.time.Time;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.contrib.streaming.state.RocksDBStateBackend;
 import org.apache.flink.core.fs.Path;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.util.FileUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
@@ -19,11 +23,16 @@ import java.nio.file.Files;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.flink.configuration.RestOptions.BIND_PORT;
+import static org.apache.flink.configuration.TaskManagerOptions.CPU_CORES;
+import static org.apache.flink.configuration.TaskManagerOptions.MANAGED_MEMORY_SIZE;
+import static org.apache.flink.configuration.TaskManagerOptions.TASK_HEAP_MEMORY;
+import static org.apache.flink.configuration.TaskManagerOptions.TASK_OFF_HEAP_MEMORY;
 
 /**
  * Common functionality to set up execution environments for the troubleshooting training.
  */
 public class EnvironmentUtils {
+	public static final Logger LOG = LoggerFactory.getLogger(EnvironmentUtils.class);
 	/**
 	 * Creates a streaming environment with a few pre-configured settings based on command-line
 	 * parameters.
@@ -45,6 +54,10 @@ public class EnvironmentUtils {
 			// configure Web UI
 			Configuration flinkConfig = new Configuration();
 			flinkConfig.set(BIND_PORT, localMode);
+			flinkConfig.set(CPU_CORES, 4.0);
+			flinkConfig.set(TASK_HEAP_MEMORY, MemorySize.ofMebiBytes(2 * 1024));
+			flinkConfig.set(TASK_OFF_HEAP_MEMORY, MemorySize.ofMebiBytes(512));
+			flinkConfig.set(MANAGED_MEMORY_SIZE, MemorySize.ofMebiBytes(2 * 1024));
 			env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(flinkConfig);
 
 			// configure filesystem state backend
@@ -64,6 +77,7 @@ public class EnvironmentUtils {
 			} else {
 				stateBackend = new FsStateBackend(checkpointPath);
 			}
+			LOG.info("Writing checkpoints to {}", checkpointPath);
 			env.setStateBackend(stateBackend);
 
 			// set a restart strategy for better IDE debugging

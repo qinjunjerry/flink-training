@@ -45,8 +45,6 @@ import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
 /**
  * Solution 3 for the streaming job with slow checkpointing
  * (Solution 1 does not need any code fixes; do you know what can be done there?).
- *
- * Sort with PriorityQueue, then use AggregateFunction
  */
 public class CheckpointingJobSolution30 {
 
@@ -69,7 +67,6 @@ public class CheckpointingJobSolution30 {
 			env.enableCheckpointing(TimeUnit.SECONDS.toMillis(10));
 			env.getCheckpointConfig().setMinPauseBetweenCheckpoints(TimeUnit.SECONDS.toMillis(10));
 			env.getCheckpointConfig().setCheckpointTimeout(TimeUnit.MINUTES.toMillis(2));
-			env.setParallelism(4);
 		}
 
 		DataStream<Tuple2<Measurement, Long>> sourceStream = env
@@ -100,7 +97,6 @@ public class CheckpointingJobSolution30 {
 						x -> x.f0.getSensorId());
 
 		DataStream<WindowedMeasurements> aggregatedPerLocation = keyedSortedStream
-//				.keyBy(x -> x.f0.getSensorId())
 				.window(SlidingEventTimeWindows.of(Time.of(1, TimeUnit.MINUTES), Time.of(1, TimeUnit.SECONDS)))
 				.aggregate(new MeasurementWindowAggregatingFunction(),
 						new MeasurementWindowProcessFunction())
@@ -108,7 +104,7 @@ public class CheckpointingJobSolution30 {
 				.uid("WindowedAggregationPerLocationAfterSorting");
 
 		if (isLocal(parameters)) {
-			aggregatedPerLocation.addSink(new DiscardingSink<>())
+			aggregatedPerLocation.print()
 					.name("NormalOutput")
 					.uid("NormalOutput")
 					.disableChaining();
@@ -141,24 +137,24 @@ public class CheckpointingJobSolution30 {
 		@Override
 		public void processElement(Tuple2<Measurement, Long> value, Context ctx, Collector<Tuple2<Measurement, Long>> out) throws Exception {
 			TimerService timerService = ctx.timerService();
+			long currentTimestamp = ctx.timestamp();
 
-			if (ctx.timestamp() > timerService.currentWatermark()) {
+			if (currentTimestamp > timerService.currentWatermark()) {
 				PriorityQueue<Tuple2<Measurement, Long>> queue = queueState.value();
 				if (queue == null) {
 					queue = new PriorityQueue<>(new MeasurementByTimeComparator());
 				}
 				queue.add(value);
 				queueState.update(queue);
-				timerService.registerEventTimeTimer(ctx.timestamp());
+				timerService.registerEventTimeTimer(currentTimestamp);
 			}
 		}
 
 		@Override
 		public void onTimer(long timestamp, OnTimerContext ctx, Collector<Tuple2<Measurement, Long>> out) throws Exception {
 			PriorityQueue<Tuple2<Measurement, Long>> queue = queueState.value();
-			Long watermark = ctx.timerService().currentWatermark();
 			Tuple2<Measurement, Long> event = queue.peek();
-			while (event != null && event.f1 <= watermark) {
+			while (event != null && event.f1 == timestamp) {
 				out.collect(event);
 				queue.remove(event);
 				event = queue.peek();
@@ -174,9 +170,11 @@ public class CheckpointingJobSolution30 {
 
 		@Override
 		public Tuple3<Long, Double, Double> createAccumulator() {
-			// f0: total number of events
-			// f1: total differences summed up in the event time order
-			// f2: previous measurement
+			/**
+			 * f0: the total number of events
+			 * f1: the total differences summed up in the event time order
+			 * f2: the value of the previous measurement
+			 */
 			return new Tuple3<Long, Double, Double>(0L, 0.0, 0.0);
 		}
 
@@ -202,10 +200,8 @@ public class CheckpointingJobSolution30 {
 		public Tuple3<Long, Double, Double> merge(
 				final Tuple3<Long, Double, Double> agg1,
 				final Tuple3<Long, Double, Double> agg2) {
-			agg1.f0 += agg2.f0;
-			agg1.f1 += agg2.f1;
-			// what about f2?
-			return agg1;
+			// this way of aggregation does not support merging of two aggregator
+			throw new UnsupportedOperationException();
 		}
 	}
 

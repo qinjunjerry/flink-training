@@ -45,9 +45,6 @@ import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
 /**
  * Solution 3 fixes the streaming job with slow checkpointing by sorting the stream based on event time
  * then pre-aggregation.
- *
- * Sort with ListState<Tuple2<Measurement, Long>>, register a timer for each event
- * Latency: 9.9s, Throughput: 11.62k, Checkpoint duration: 8s
  */
 public class CheckpointingJobSolution320 {
 
@@ -103,8 +100,8 @@ public class CheckpointingJobSolution320 {
 				.window(SlidingEventTimeWindows.of(Time.of(1, TimeUnit.MINUTES), Time.of(1, TimeUnit.SECONDS)))
 				.aggregate(new MeasurementWindowAggregatingFunction(),
 						new MeasurementWindowProcessFunction())
-				.name("WindowedAggregationPerLocation")
-				.uid("WindowedAggregationPerLocation");
+				.name("WindowedAggregationPerLocationAfterSorting")
+				.uid("WindowedAggregationPerLocationAfterSorting");
 
 		if (isLocal(parameters)) {
 			aggregatedPerLocation.print()
@@ -141,10 +138,11 @@ public class CheckpointingJobSolution320 {
 		@Override
 		public void processElement(Tuple2<Measurement, Long> value, Context ctx, Collector<Tuple2<Measurement, Long>> out) throws Exception {
 			TimerService timerService = ctx.timerService();
+			long currentTimestamp = ctx.timestamp();
 
-			if (ctx.timestamp() > timerService.currentWatermark()) {
+			if (currentTimestamp > timerService.currentWatermark()) {
 				listState.add(value);
-				timerService.registerEventTimeTimer(ctx.timestamp());
+				timerService.registerEventTimeTimer(currentTimestamp);
 			}
 		}
 
@@ -153,21 +151,17 @@ public class CheckpointingJobSolution320 {
 							Collector<Tuple2<Measurement, Long>> out) throws Exception {
 
 			ArrayList<Tuple2<Measurement, Long>> list = new ArrayList<>();
-			listState.get().iterator().forEachRemaining(list::add);
-			list.sort(new MeasurementByTimeComparator());
-
-			Long watermark = ctx.timerService().currentWatermark();
-			int index = 0;
-			for (Tuple2<Measurement, Long> event : list) {
-				if (event != null && event.f1 <= watermark) {
+			listState.get().forEach( event -> {
+				// cannot emit all events earlier than watermark because otherwise those emitted events will all have
+				// the same timestamp as this timer
+				if (event.f1 == timestamp) {
 					out.collect(event);
-					index++;
 				} else {
-					break;
+					list.add(event);
 				}
-			}
-			list.subList(0, index).clear();
+			});
 			listState.update(list);
+
 		}
 	}
 
@@ -207,8 +201,8 @@ public class CheckpointingJobSolution320 {
 		public Tuple3<Long, Double, Double> merge(
 				final Tuple3<Long, Double, Double> agg1,
 				final Tuple3<Long, Double, Double> agg2) {
-			// not needed in this case
-			return null;
+			// this way of aggregation does not support merging of two aggregator
+			throw new UnsupportedOperationException();
 		}
 	}
 

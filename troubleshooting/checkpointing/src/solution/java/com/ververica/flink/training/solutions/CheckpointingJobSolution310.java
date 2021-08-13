@@ -43,8 +43,6 @@ import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
 /**
  * Solution 3 fixes the streaming job with slow checkpointing by sorting the stream based on event time
  * then pre-aggregation.
- *
- * Sort with MapState<Long, Measurement>, register a timer for each event
  */
 public class CheckpointingJobSolution310 {
 
@@ -100,8 +98,8 @@ public class CheckpointingJobSolution310 {
 				.window(SlidingEventTimeWindows.of(Time.of(1, TimeUnit.MINUTES), Time.of(1, TimeUnit.SECONDS)))
 				.aggregate(new MeasurementWindowAggregatingFunction(),
 						new MeasurementWindowProcessFunction())
-				.name("WindowedAggregationPerLocation")
-				.uid("WindowedAggregationPerLocation");
+				.name("WindowedAggregationPerLocationAfterSorting")
+				.uid("WindowedAggregationPerLocationAfterSorting");
 
 		if (isLocal(parameters)) {
 			aggregatedPerLocation.print()
@@ -139,10 +137,11 @@ public class CheckpointingJobSolution310 {
 		@Override
 		public void processElement(Tuple2<Measurement, Long> value, Context ctx, Collector<Tuple2<Measurement, Long>> out) throws Exception {
 			TimerService timerService = ctx.timerService();
+			long currentTimestamp = ctx.timestamp();
 
-			if (ctx.timestamp() > timerService.currentWatermark()) {
-				mapState.put(value.f1, value.f0);
-				timerService.registerEventTimeTimer(ctx.timestamp());
+			if (currentTimestamp > timerService.currentWatermark()) {
+				mapState.put(currentTimestamp, value.f0);
+				timerService.registerEventTimeTimer(currentTimestamp);
 			}
 		}
 

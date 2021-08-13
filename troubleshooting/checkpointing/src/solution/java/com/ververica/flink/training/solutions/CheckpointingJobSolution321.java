@@ -45,9 +45,6 @@ import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
 /**
  * Solution 3 fixes the streaming job with slow checkpointing by sorting the stream based on event time
  * then pre-aggregation.
- *
- * Sort with ListState<Tuple2<Measurement, Long>>, register a timer per watermark
- * Latency: 7.3s, Throughput: 11.88k, Checkpoint duration: 6s
  */
 public class CheckpointingJobSolution321 {
 
@@ -92,19 +89,37 @@ public class CheckpointingJobSolution321 {
 				.keyBy(x -> x.f0.getSensorId())
 				.process(new SortMeasurementFunction())
 				.name("Sorting")
-				.uid("Sorting");
+				.uid("Sorting")
+				.assignTimestampsAndWatermarks(
+						WatermarkStrategy
+								.<Tuple2<Measurement, Long>>forMonotonousTimestamps()
+								.withTimestampAssigner(
+										(element, timestamp) -> element.f1)
+								.withIdleness(Duration.ofSeconds(1)))
+				.name("Watermarks2")
+				.uid("Watermarks2");
 
 		KeyedStream<Tuple2<Measurement, Long>, Integer> keyedSortedStream =
 				DataStreamUtils.reinterpretAsKeyedStream(
 						sortedStream,
 						x -> x.f0.getSensorId());
 
+		// This can be used to verify the above watermarks2 works or not
+//		keyedSortedStream.process(new KeyedProcessFunction<Integer, Tuple2<Measurement, Long>, Object>() {
+//			@Override
+//			public void processElement(Tuple2<Measurement, Long> value, KeyedProcessFunction<Integer, Tuple2<Measurement, Long>, Object>.Context ctx, Collector<Object> out) throws Exception {
+//				if ( !ctx.timestamp().equals(value.f1) ) {
+//					throw new Exception("The time in the event is not same as the timestamp used by Flink!");
+//				}
+//			}
+//		});
+
 		DataStream<WindowedMeasurements> aggregatedPerLocation = keyedSortedStream
 				.window(SlidingEventTimeWindows.of(Time.of(1, TimeUnit.MINUTES), Time.of(1, TimeUnit.SECONDS)))
 				.aggregate(new MeasurementWindowAggregatingFunction(),
 						new MeasurementWindowProcessFunction())
-				.name("WindowedAggregationPerLocation")
-				.uid("WindowedAggregationPerLocation");
+				.name("WindowedAggregationPerLocationAfterSorting")
+				.uid("WindowedAggregationPerLocationAfterSorting");
 
 		if (isLocal(parameters)) {
 			aggregatedPerLocation.print()
@@ -154,12 +169,14 @@ public class CheckpointingJobSolution321 {
 							Collector<Tuple2<Measurement, Long>> out) throws Exception {
 
 			ArrayList<Tuple2<Measurement, Long>> list = new ArrayList<>();
-			listState.get().iterator().forEachRemaining(list::add);
+			listState.get().forEach(list::add);
 			list.sort(new MeasurementByTimeComparator());
 
 			Long watermark = ctx.timerService().currentWatermark();
 			int index = 0;
 			for (Tuple2<Measurement, Long> event : list) {
+				// this requires re-assign timestamps and watermarks. Otherwise, the emitted events here are all having
+				// the same timestamp as this timer.
 				if (event != null && event.f1 <= watermark) {
 					out.collect(event);
 					index++;
@@ -208,8 +225,8 @@ public class CheckpointingJobSolution321 {
 		public Tuple3<Long, Double, Double> merge(
 				final Tuple3<Long, Double, Double> agg1,
 				final Tuple3<Long, Double, Double> agg2) {
-			// not needed in this case
-			return null;
+			// this way of aggregation does not support merging of two aggregator
+			throw new UnsupportedOperationException();
 		}
 	}
 

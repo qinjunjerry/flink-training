@@ -31,6 +31,8 @@ import com.ververica.flink.training.common.FakeKafkaRecord;
 import com.ververica.flink.training.common.Measurement;
 import com.ververica.flink.training.common.SourceUtils;
 import com.ververica.flink.training.common.WindowedMeasurements;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -38,6 +40,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 import static com.ververica.flink.training.common.EnvironmentUtils.createConfiguredEnvironment;
@@ -46,9 +49,6 @@ import static com.ververica.flink.training.common.EnvironmentUtils.isLocal;
 /**
  * Solution 3 fixes the streaming job with slow checkpointing by sorting the stream based on event time
  * then pre-aggregation.
- *
- * Sort with MapState<Long, List<Measurement>>, register a timer per watermark
- * Latency: 14.5s, Throughput: 8.11k, Checkpoint duration: 10s
  */
 public class CheckpointingJobSolution331 {
 
@@ -93,7 +93,15 @@ public class CheckpointingJobSolution331 {
 				.keyBy(x -> x.f0.getSensorId())
 				.process(new SortMeasurementFunction())
 				.name("Sorting")
-				.uid("Sorting");
+				.uid("Sorting")
+				.assignTimestampsAndWatermarks(
+						WatermarkStrategy
+								.<Tuple2<Measurement, Long>>forMonotonousTimestamps()
+								.withTimestampAssigner(
+										(element, timestamp) -> element.f1)
+								.withIdleness(Duration.ofSeconds(1)))
+				.name("Watermarks2")
+				.uid("Watermarks2");
 
 		KeyedStream<Tuple2<Measurement, Long>, Integer> keyedSortedStream =
 				DataStreamUtils.reinterpretAsKeyedStream(
@@ -104,8 +112,8 @@ public class CheckpointingJobSolution331 {
 				.window(SlidingEventTimeWindows.of(Time.of(1, TimeUnit.MINUTES), Time.of(1, TimeUnit.SECONDS)))
 				.aggregate(new MeasurementWindowAggregatingFunction(),
 						new MeasurementWindowProcessFunction())
-				.name("WindowedAggregationPerLocation")
-				.uid("WindowedAggregationPerLocation");
+				.name("WindowedAggregationPerLocationAfterSorting")
+				.uid("WindowedAggregationPerLocationAfterSorting");
 
 		if (isLocal(parameters)) {
 			aggregatedPerLocation.print()
@@ -162,23 +170,18 @@ public class CheckpointingJobSolution331 {
 							Collector<Tuple2<Measurement, Long>> out) throws Exception {
 			Long currentWatermark = ctx.timerService().currentWatermark();
 
-			StreamSupport.stream(mapState.keys().spliterator(), false)
+			List<Long> list = StreamSupport.stream(mapState.keys().spliterator(), false)
 				.filter( e -> e <= currentWatermark)
 				.sorted()
-				.map(eventTimestamp -> {
-							try {
-								List<Measurement> measurementList = mapState.get(eventTimestamp);
-								for (Measurement measurement : measurementList) {
-									out.collect(new Tuple2<>(measurement, eventTimestamp));
-								}
-								mapState.remove(eventTimestamp);
-							} catch (Exception e) {
-								e.printStackTrace();
-							} finally {
-								return null;
-							}
-						}
-				);
+					.collect(Collectors.toList());
+
+			for (Long eventTimestamp : list) {
+				List<Measurement> measurementList = mapState.get(eventTimestamp);
+				for (Measurement measurement : measurementList) {
+					out.collect(new Tuple2<>(measurement, eventTimestamp));
+				}
+				mapState.remove(eventTimestamp);
+			}
 		}
 	}
 
@@ -283,6 +286,7 @@ public class CheckpointingJobSolution331 {
 				final Context context,
 				final Iterable<Tuple2<Long, Double>> input,
 				final Collector<WindowedMeasurements> out) {
+
 
 			final TimeWindow window = context.window();
 			Tuple2<Long, Double> result = input.iterator().next();
